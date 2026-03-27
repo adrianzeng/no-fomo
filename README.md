@@ -87,7 +87,7 @@ python scripts/weekly_review.py --days 7
 
 ```bash
 # 克隆仓库
-git clone https://github.com/YOUR_USERNAME/no-fomo.git
+git clone https://github.com/adrianzeng/no-fomo.git
 cd no-fomo
 
 # 测试安装（无需额外依赖）
@@ -252,8 +252,8 @@ python scripts/binance_auto_learn.py --symbol BTCUSDT
 
 ## 📬 联系方式
 
-- 项目地址：https://github.com/YOUR_USERNAME/no-fomo
-- 问题反馈：https://github.com/YOUR_USERNAME/no-fomo/issues
+- 项目地址：https://github.com/adrianzeng/no-fomo
+- 问题反馈：https://github.com/adrianzeng/no-fomo/issues
 
 ---
 
