@@ -2,42 +2,47 @@
 # -*- coding: utf-8 -*-
 """
 Generate weekly trading review reports.
-
-This script creates comprehensive weekly reviews including:
-- Performance summary
-- Best and worst trades
-- Impulse trading analysis
-- Pattern insights
-- Lessons learned
-- Next week's improvement goals
 """
 
-import sys
-import json
-import argparse
-from pathlib import Path
-from datetime import datetime, timedelta
-from collections import defaultdict
+from __future__ import annotations
 
-# Fix Windows console encoding
+import argparse
+import io
+import json
+import sys
+from collections import defaultdict
+from contextlib import redirect_stdout
+from datetime import datetime, timedelta
+from pathlib import Path
+
 if sys.platform == "win32":
-    import io
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', line_buffering=True)
+    import io as sys_io
+
+    sys.stdout = sys_io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", line_buffering=True)
 
 DATA_DIR = Path(__file__).parent.parent / "data"
 TRADES_FILE = DATA_DIR / "trades.json"
 
-# Import analysis utilities
 sys.path.insert(0, str(Path(__file__).parent))
-from trade_analysis_utils import (
-    get_impulse_statistics,
-    analyze_reason_quality,
-    detect_price_action_pattern,
-)
+from trade_analysis_utils import analyze_reason_quality, detect_price_action_pattern, get_impulse_statistics  # noqa: E402
+
+
+def build_json_response(report_type, data=None, error=None):
+    response = {
+        "meta": {
+            "report_type": report_type,
+            "generated_at": datetime.now().isoformat(),
+            "status": "error" if error else "ok",
+        }
+    }
+    if error:
+        response["error"] = error
+    else:
+        response["data"] = data
+    return response
 
 
 def load_trades():
-    """Load trades from JSON file."""
     if not TRADES_FILE.exists():
         return []
     with open(TRADES_FILE, "r", encoding="utf-8") as handle:
@@ -46,250 +51,200 @@ def load_trades():
 
 
 def get_trades_by_period(trades, days=7):
-    """Get trades from the last N days."""
     now = datetime.now()
     cutoff = now - timedelta(days=days)
-
-    recent_trades = []
+    recent = []
     for trade in trades:
         try:
             trade_time = datetime.fromisoformat(trade["timestamp"])
-            if trade_time >= cutoff:
-                recent_trades.append(trade)
         except (KeyError, ValueError):
             continue
-
-    return recent_trades
+        if trade_time >= cutoff:
+            recent.append(trade)
+    return recent
 
 
 def calculate_performance_metrics(trades):
-    """Calculate key performance metrics."""
-    if not trades:
-        return {}
-
-    wins = [t for t in trades if t.get("result") == "WIN"]
-    losses = [t for t in trades if t.get("result") == "LOSS"]
-
-    total_pnl = sum(t.get("pnl_percent", 0) for t in trades)
-    avg_win = sum(t.get("pnl_percent", 0) for t in wins) / len(wins) if wins else 0
-    avg_loss = sum(t.get("pnl_percent", 0) for t in losses) / len(losses) if losses else 0
-
-    win_rate = len(wins) / len(trades) * 100 if trades else 0
-    profit_factor = abs(avg_win / avg_loss) if avg_loss else 0
-
-    # Best and worst trades
-    best_trade = max(trades, key=lambda x: x.get("pnl_percent", 0)) if trades else None
-    worst_trade = min(trades, key=lambda x: x.get("pnl_percent", 0)) if trades else None
-
+    wins = [trade for trade in trades if trade.get("result") == "WIN"]
+    losses = [trade for trade in trades if trade.get("result") == "LOSS"]
+    total_pnl = sum(trade.get("pnl_percent", 0) for trade in trades)
+    avg_win = sum(trade.get("pnl_percent", 0) for trade in wins) / len(wins) if wins else 0
+    avg_loss = sum(trade.get("pnl_percent", 0) for trade in losses) / len(losses) if losses else 0
     return {
         "total_trades": len(trades),
         "wins": len(wins),
         "losses": len(losses),
-        "win_rate": win_rate,
+        "win_rate": len(wins) / len(trades) * 100 if trades else 0,
         "total_pnl": total_pnl,
         "avg_win": avg_win,
         "avg_loss": avg_loss,
-        "profit_factor": profit_factor,
-        "best_trade": best_trade,
-        "worst_trade": worst_trade,
+        "profit_factor": abs(avg_win / avg_loss) if avg_loss else None,
+        "best_trade": max(trades, key=lambda trade: trade.get("pnl_percent", 0)) if trades else None,
+        "worst_trade": min(trades, key=lambda trade: trade.get("pnl_percent", 0)) if trades else None,
     }
 
 
 def analyze_reason_quality_distribution(trades):
-    """Analyze the distribution of reason quality."""
-    quality_counts = defaultdict(int)
-    low_quality_trades = []
-
+    distribution = defaultdict(int)
+    low_quality = []
     for trade in trades:
-        reason = trade.get("reason", "")
-        analysis = analyze_reason_quality(reason)
-        quality_counts[analysis["level"]] += 1
-
-        if analysis["level"] in ["POOR", "IMPULSIVE"]:
-            low_quality_trades.append({
-                "trade": trade,
-                "analysis": analysis,
-            })
-
-    return {
-        "distribution": dict(quality_counts),
-        "low_quality_trades": low_quality_trades,
-    }
+        analysis = analyze_reason_quality(trade.get("reason", ""))
+        distribution[analysis["level"]] += 1
+        if analysis["level"] in ["POOR", "IMPULSIVE", "MISSING"]:
+            low_quality.append({"trade": trade, "analysis": analysis})
+    return {"distribution": dict(distribution), "low_quality_trades": low_quality}
 
 
 def generate_lessons_learned(trades, metrics):
-    """Generate lessons learned from the trading period."""
     lessons = []
-
-    # Analyze impulse trading impact
     impulse_stats = get_impulse_statistics(trades)
     if impulse_stats.get("impulse_count", 0) > 0:
         diff = impulse_stats.get("normal_win_rate", 0) - impulse_stats.get("impulse_win_rate", 0)
         if diff > 0:
             lessons.append({
                 "category": "impulse_control",
-                "lesson": f"避免冲动交易可以提高胜率约 {diff:.1f}%",
-                "evidence": f"冲动交易胜率 {impulse_stats['impulse_win_rate']:.1f}% vs 理性交易 {impulse_stats['normal_win_rate']:.1f}%",
+                "lesson": f"减少冲动交易，理论上可提升胜率约 {diff:.1f}%。",
+                "evidence": f"冲动交易胜率 {impulse_stats['impulse_win_rate']:.1f}% vs 理性交易胜率 {impulse_stats['normal_win_rate']:.1f}%",
+            })
+        else:
+            lessons.append({
+                "category": "impulse_control",
+                "lesson": "即使冲动交易短期盈利，也不能把结果当作方法有效的证明。",
+                "evidence": f"本周期识别到 {impulse_stats['impulse_count']} 笔冲动交易，短期结果不能替代稳定方法。",
             })
 
-    # Analyze best trade pattern
-    if metrics.get("best_trade"):
-        best = metrics["best_trade"]
-        patterns = detect_price_action_pattern(best.get("reason", ""))
-        if patterns:
-            pattern_desc = ", ".join([p.get("description", "") for p in patterns])
+    best_trade = metrics.get("best_trade")
+    if best_trade:
+        best_reason = analyze_reason_quality(best_trade.get("reason", ""))
+        patterns = detect_price_action_pattern(best_trade.get("reason", ""))
+        if patterns and best_reason["level"] not in ["POOR", "IMPULSIVE", "MISSING"]:
+            pattern_desc = ", ".join(pattern.get("description", "") for pattern in patterns)
             lessons.append({
                 "category": "winning_pattern",
-                "lesson": "成功的交易通常具备明确的技术面依据",
-                "evidence": f"最佳交易 ({best['symbol']} +{best['pnl_percent']:.2f}%): {pattern_desc}",
+                "lesson": "表现最好的交易通常具备更清晰的结构依据与执行纪律。",
+                "evidence": f"最佳交易 ({best_trade['symbol']} {best_trade['pnl_percent']:+.2f}%): {pattern_desc}",
             })
 
-    # Analyze worst trade pattern
-    if metrics.get("worst_trade"):
-        worst = metrics["worst_trade"]
-        reason_analysis = analyze_reason_quality(worst.get("reason", ""))
-        if reason_analysis["level"] in ["POOR", "IMPULSIVE"]:
+    worst_trade = metrics.get("worst_trade")
+    if worst_trade:
+        worst_reason = analyze_reason_quality(worst_trade.get("reason", ""))
+        if worst_reason["level"] in ["POOR", "IMPULSIVE", "MISSING"]:
             lessons.append({
                 "category": "loss_lesson",
-                "lesson": "理由不充分的交易容易导致亏损",
-                "evidence": f"最差交易 ({worst['symbol']} {worst['pnl_percent']:+.2f}%): {reason_analysis['feedback']}",
+                "lesson": "理由不充分的交易会明显削弱决策质量，需要在开仓前被拦下来。",
+                "evidence": f"最差交易 ({worst_trade['symbol']} {worst_trade['pnl_percent']:+.2f}%): {worst_reason['feedback']}",
             })
-
     return lessons
 
 
-def generate_improvement_goals(trades, metrics, lessons):
-    """Generate specific improvement goals for next week."""
+def generate_improvement_goals(trades, metrics):
     goals = []
-
-    # Impulse control goal
     impulse_stats = get_impulse_statistics(trades)
-    impulse_count = impulse_stats.get("impulse_count", 0)
-    if impulse_count > 2:
+    if impulse_stats.get("impulse_count", 0) > 2:
         goals.append({
             "goal": "减少冲动交易",
-            "target": f"将冲动交易控制在每周≤2 次 (本周{impulse_count}次)",
-            "action": "每次开仓前等待 5 分钟，写下明确的开仓理由",
+            "target": f"将冲动交易控制在每周 2 笔以内（本周 {impulse_stats['impulse_count']} 笔）",
+            "action": "每次开仓前至少停 5 分钟，写下明确的入场依据与失效条件。",
         })
 
-    # Reason quality goal
     quality_data = analyze_reason_quality_distribution(trades)
-    low_quality_count = len(quality_data.get("low_quality_trades", []))
-    if low_quality_count > 0:
+    if quality_data.get("low_quality_trades"):
         goals.append({
             "goal": "提高开仓理由质量",
-            "target": "每笔交易都有明确的技术面依据",
-            "action": "使用检查清单：突破位/支撑位、指标信号、盈亏比",
+            "target": "每笔交易都有明确的技术依据、止损和无效条件",
+            "action": "固定使用 checklist：结构、关键位、指标、止损、盈亏比。",
         })
 
-    # Win rate goal
-    win_rate = metrics.get("win_rate", 0)
-    if win_rate < 50:
+    if metrics.get("win_rate", 0) < 50:
         goals.append({
             "goal": "提高胜率",
-            "target": "胜率提升至 50% 以上",
-            "action": "只在高胜率模式下开仓，避免低胜率模式",
+            "target": "将胜率提升到 50% 以上",
+            "action": "减少低质量尝试，只做自己最熟悉的 setup。",
         })
 
-    # Trading frequency goal
-    total_trades = metrics.get("total_trades", 0)
-    if total_trades > 10:
+    if metrics.get("total_trades", 0) > 10:
         goals.append({
             "goal": "控制交易频率",
-            "target": "每周交易≤10 笔",
-            "action": "宁缺毋滥，等待最佳机会",
+            "target": "每周交易不超过 10 笔",
+            "action": "减少无计划试单，把精力放在高确定性机会。",
         })
 
-    # Default goal if no specific issues
     if not goals:
         goals.append({
-            "goal": "保持良好习惯",
-            "target": "继续当前的理性交易方式",
-            "action": "坚持记录每笔交易的开仓理由和复盘",
+            "goal": "保持当前习惯",
+            "target": "继续维持理性交易与固定复盘节奏",
+            "action": "坚持记录每笔交易的理由、执行和复盘结论。",
         })
-
     return goals
 
 
 def print_weekly_report(period_days, metrics, quality_data, lessons, goals, impulse_stats):
-    """Print formatted weekly review report."""
     print("=" * 60)
-    print(f"交易周报复盘 (过去 {period_days} 天)")
+    print(f"交易周报复盘（过去 {period_days} 天）")
     print("=" * 60)
 
-    # Performance Summary
-    print("\n【表现摘要】")
+    print("\n[表现摘要]")
     print("-" * 40)
     print(f"  总交易数：{metrics['total_trades']}")
     print(f"  盈利：{metrics['wins']} | 亏损：{metrics['losses']}")
     print(f"  胜率：{metrics['win_rate']:.1f}%")
     print(f"  总 PnL: {metrics['total_pnl']:+.2f}%")
-    if metrics['profit_factor'] > 0:
+    if metrics["profit_factor"] is not None:
         print(f"  盈利因子：{metrics['profit_factor']:.2f}x")
+    elif metrics["wins"] > 0 and metrics["losses"] == 0:
+        print("  盈利因子：N/A（当前周期无亏损交易）")
 
-    # Best and Worst Trades
     if metrics.get("best_trade"):
-        best = metrics["best_trade"]
-        print(f"\n  最佳交易：{best['symbol']} {best['direction']}")
-        print(f"    PnL: +{best['pnl_percent']:.2f}%")
-        print(f"    理由：{best.get('reason', 'N/A')[:50]}...")
+        best_trade = metrics["best_trade"]
+        print(f"\n  最佳交易：{best_trade['symbol']} {best_trade['direction']}")
+        print(f"    PnL: {best_trade['pnl_percent']:+.2f}%")
+        print(f"    理由：{best_trade.get('reason', 'N/A')[:50]}...")
 
     if metrics.get("worst_trade"):
-        worst = metrics["worst_trade"]
-        print(f"\n  最差交易：{worst['symbol']} {worst['direction']}")
-        print(f"    PnL: {worst['pnl_percent']:+.2f}%")
-        print(f"    理由：{worst.get('reason', 'N/A')[:50]}...")
+        worst_trade = metrics["worst_trade"]
+        print(f"\n  最差交易：{worst_trade['symbol']} {worst_trade['direction']}")
+        print(f"    PnL: {worst_trade['pnl_percent']:+.2f}%")
+        print(f"    理由：{worst_trade.get('reason', 'N/A')[:50]}...")
 
-    # Reason Quality Distribution
-    print("\n【开仓理由质量分布】")
+    print("\n[开仓理由质量分布]")
     print("-" * 40)
-    dist = quality_data.get("distribution", {})
-    for level in ["EXCELLENT", "GOOD", "WARNING", "POOR", "IMPULSIVE"]:
-        count = dist.get(level, 0)
+    for level in ["EXCELLENT", "GOOD", "WARNING", "POOR", "IMPULSIVE", "MISSING"]:
+        count = quality_data["distribution"].get(level, 0)
         if count > 0:
-            indicator = "✓" if level in ["EXCELLENT", "GOOD"] else "!"
+            indicator = "[OK]" if level in ["EXCELLENT", "GOOD"] else "[!]"
             print(f"  {indicator} {level}: {count} 笔")
 
-    # Impulse Trading Analysis
-    print("\n【冲动交易分析】")
+    print("\n[冲动交易分析]")
     print("-" * 40)
-    impulse_count = impulse_stats.get("impulse_count", 0)
-    if impulse_count > 0:
-        print(f"  冲动交易：{impulse_count} 笔 ({impulse_stats['impulse_percentage']:.1f}%)")
+    if impulse_stats.get("impulse_count", 0) > 0:
+        print(f"  冲动交易：{impulse_stats['impulse_count']} 笔 ({impulse_stats['impulse_percentage']:.1f}%)")
         print(f"  冲动交易胜率：{impulse_stats['impulse_win_rate']:.1f}%")
         print(f"  理性交易胜率：{impulse_stats['normal_win_rate']:.1f}%")
     else:
-        print("  暂无冲动交易记录，继续保持！")
+        print("  暂无冲动交易记录，继续保持。")
 
-    # Lessons Learned
-    print("\n【本周学到的教训】")
+    print("\n[本周学到的教训]")
     print("-" * 40)
     if lessons:
-        for i, lesson in enumerate(lessons, 1):
-            print(f"  {i}. [{lesson['category']}]")
+        for index, lesson in enumerate(lessons, 1):
+            print(f"  {index}. [{lesson['category']}]")
             print(f"     {lesson['lesson']}")
             print(f"     依据：{lesson['evidence']}")
     else:
-        print("  继续积累数据以获取更多洞察")
+        print("  暂无明显结论，继续积累数据。")
 
-    # Next Week Goals
-    print("\n【下周改进目标】")
+    print("\n[下周改进目标]")
     print("-" * 40)
-    for i, goal in enumerate(goals, 1):
-        print(f"  {i}. {goal['goal']}")
+    for index, goal in enumerate(goals, 1):
+        print(f"  {index}. {goal['goal']}")
         print(f"     目标：{goal['target']}")
         print(f"     行动：{goal['action']}")
 
     print("\n" + "=" * 60)
 
 
-def generate_json_report(period_days, metrics, quality_data, lessons, goals, impulse_stats):
-    """Generate JSON report for AI consumption."""
-    # Convert best/worst trade to serializable format
-    best_trade = metrics.get("best_trade")
-    worst_trade = metrics.get("worst_trade")
-
-    report = {
+def generate_report_data(period_days, metrics, quality_data, lessons, goals, impulse_stats):
+    return {
         "period_days": period_days,
         "generated_at": datetime.now().isoformat(),
         "performance": {
@@ -302,15 +257,13 @@ def generate_json_report(period_days, metrics, quality_data, lessons, goals, imp
             "avg_loss": metrics["avg_loss"],
             "profit_factor": metrics["profit_factor"],
         },
-        "best_trade": best_trade,
-        "worst_trade": worst_trade,
+        "best_trade": metrics.get("best_trade"),
+        "worst_trade": metrics.get("worst_trade"),
         "reason_quality": quality_data.get("distribution", {}),
         "impulse_trading": impulse_stats,
         "lessons_learned": lessons,
         "improvement_goals": goals,
     }
-
-    return report
 
 
 def main():
@@ -319,84 +272,66 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python weekly_review.py                 # 7-day report
-  python weekly_review.py --days 30       # 30-day report
-  python weekly_review.py --json          # JSON output
-  python weekly_review.py --save          # Save to file
-        """
+  python weekly_review.py
+  python weekly_review.py --days 30
+  python weekly_review.py --json
+  python weekly_review.py --save
+        """,
     )
-
-    parser.add_argument(
-        "--days",
-        type=int,
-        default=7,
-        help="Number of days to analyze (default: 7)"
-    )
-    parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Output as JSON"
-    )
-    parser.add_argument(
-        "--save",
-        action="store_true",
-        help="Save report to file"
-    )
-
+    parser.add_argument("--days", type=int, default=7, help="Number of days to analyze (default: 7)")
+    parser.add_argument("--json", action="store_true", help="Output as JSON")
+    parser.add_argument("--save", action="store_true", help="Save report to file")
     args = parser.parse_args()
 
     trades = load_trades()
-
     if not trades:
+        if args.json:
+            print(json.dumps(build_json_response(
+                "weekly_review",
+                error={"code": "no_trades", "message": "No trades logged yet."},
+            ), indent=2, ensure_ascii=False))
+            return
         print("暂无交易数据。请先使用 log_trade.py 记录交易。")
         return
 
-    # Get trades for the period
     period_trades = get_trades_by_period(trades, args.days)
-
     if not period_trades:
-        print(f"过去 {args.days} 天没有交易记录")
+        if args.json:
+            print(json.dumps(build_json_response(
+                "weekly_review",
+                error={"code": "no_trades_in_period", "message": f"No trades found in the last {args.days} days."},
+            ), indent=2, ensure_ascii=False))
+            return
+        print(f"过去 {args.days} 天没有交易记录。")
         return
 
-    # Calculate metrics
     metrics = calculate_performance_metrics(period_trades)
     quality_data = analyze_reason_quality_distribution(period_trades)
     impulse_stats = get_impulse_statistics(period_trades)
     lessons = generate_lessons_learned(period_trades, metrics)
-    goals = generate_improvement_goals(period_trades, metrics, lessons)
+    goals = generate_improvement_goals(period_trades, metrics)
+    report = generate_report_data(args.days, metrics, quality_data, lessons, goals, impulse_stats)
 
     if args.json:
-        report = generate_json_report(args.days, metrics, quality_data, lessons, goals, impulse_stats)
-        print(json.dumps(report, indent=2, ensure_ascii=False))
+        print(json.dumps(build_json_response("weekly_review", data=report), indent=2, ensure_ascii=False))
     else:
         print_weekly_report(args.days, metrics, quality_data, lessons, goals, impulse_stats)
 
     if args.save:
-        # Save report to file
         report_dir = DATA_DIR / "reports"
         report_dir.mkdir(parents=True, exist_ok=True)
-
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        report_file = report_dir / f"weekly_review_{timestamp}.txt"
-
         if args.json:
-            report = generate_json_report(args.days, metrics, quality_data, lessons, goals, impulse_stats)
             json_file = report_dir / f"weekly_review_{timestamp}.json"
-            with open(json_file, "w", encoding="utf-8") as f:
-                json.dump(report, f, indent=2, ensure_ascii=False)
-            print(f"\n报告已保存至：{json_file}")
+            with open(json_file, "w", encoding="utf-8") as handle:
+                json.dump(report, handle, indent=2, ensure_ascii=False)
         else:
-            # Re-generate text report to file
-            import io
-            from contextlib import redirect_stdout
-
-            f = io.StringIO()
-            with redirect_stdout(f):
+            report_file = report_dir / f"weekly_review_{timestamp}.txt"
+            buffer = io.StringIO()
+            with redirect_stdout(buffer):
                 print_weekly_report(args.days, metrics, quality_data, lessons, goals, impulse_stats)
-            report_content = f.getvalue()
-
-            with open(report_file, "w", encoding="utf-8") as file:
-                file.write(report_content)
+            with open(report_file, "w", encoding="utf-8") as handle:
+                handle.write(buffer.getvalue())
             print(f"\n报告已保存至：{report_file}")
 
 

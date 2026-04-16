@@ -1,102 +1,240 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code when working in this repository.
 
 ## Project Overview
 
-**no-fomo** is a trading discipline tool that helps traders avoid impulsive decisions (FOMO, revenge trading, emotional trades) through structured review and analysis. It's designed as both a standalone CLI tool and an OpenClaw Skill.
+**no-fomo** is an AI-assisted trading discipline tool for discretionary traders.
+
+It is designed around a simple idea:
+
+- review the trade thesis before entry
+- review execution after exit
+- reduce FOMO, revenge trading, and low-quality decisions
+- build a repeatable decision process rather than chasing signals
+
+This project is intentionally:
+
+- not a market prediction product
+- not an auto-trading bot
+- not a quant platform
+
+It is both:
+
+1. a standalone local CLI tool
+2. a skill-oriented project that can be used through OpenClaw / Claude Code style workflows
+
+## Current Product Shape
+
+The current MVP already supports a full review loop:
+
+1. `pre_trade_check.py`
+2. optional AI pre-trade review via `--ai`
+3. manual trade execution outside the tool
+4. `log_trade.py`
+5. optional AI post-trade review via `--ai`
+6. history lookup through `ai_review_history.py`
+7. periodic analysis through impulse / pattern / weekly review scripts
+
+This means the repository should be treated as an **AI trading discipline MVP**, not just a collection of utility scripts.
+
+## Important Principles
+
+When editing or extending this project, preserve these boundaries:
+
+### What No-FOMO should do
+
+- help users clarify their thesis before entry
+- help users review execution quality after exit
+- reinforce discipline, not excitement
+- identify impulse behavior and repeated decision patterns
+- work well in CLI-first or skill-style workflows
+
+### What No-FOMO should not do
+
+- tell users which direction the market will go
+- automatically place or manage trades
+- optimize for hype, token incentives, or gamified speculation
+- reward raw profit over decision quality
+
+## Current Core Scripts
+
+### Core decision flow
+
+- `scripts/pre_trade_check.py`
+- `scripts/log_trade.py`
+- `scripts/ai_review_history.py`
+
+### Analysis layer
+
+- `scripts/analyze_impulse.py`
+- `scripts/analyze_patterns.py`
+- `scripts/weekly_review.py`
+
+### Shared AI / utility layer
+
+- `scripts/ai_client.py`
+- `scripts/trade_analysis_utils.py`
+
+### Exchange integration
+
+- `scripts/binance_client.py`
+- `scripts/binance_sync.py`
+- `scripts/setup_binance_config.py`
+
+## Data Files
+
+Primary local data files:
+
+- `data/trades.json`
+- `data/ai_reviews.json`
+- `data/learned_rules.json`
+
+Guidance:
+
+- `trades.json` is the trade journal
+- `ai_reviews.json` stores AI review history separately
+- avoid mixing AI review records directly into unrelated structures unless necessary
+
+## AI Configuration
+
+AI review uses a separate local `.ai.env` file.
+
+Expected keys:
+
+- `AI_API_KEY`
+- `AI_BASE_URL`
+- `AI_MODEL`
+
+The project currently uses an **OpenAI-compatible `/chat/completions`** interface.
+
+That means Claude Code should preserve this design unless there is a strong reason to change it.
+Do not add provider-specific SDK complexity by default.
+
+## Binance Configuration
+
+Binance integration uses local `.binance.env`.
+
+Expected use:
+
+- import completed Binance Futures trades
+- not manage open positions as first-class records yet
+
+Important:
+
+- local proxy behavior matters
+- browser access and Python access are not equivalent
+- avoid assuming system proxy is automatically inherited by CLI tools
+
+## Development Priorities
+
+If asked what should be built next, the priority order is:
+
+1. strengthen the current AI review loop
+2. add active trade intervention (`active_trade_review.py`)
+3. add AI-powered periodic coaching / summaries
+4. improve structured input ergonomics
+5. only then consider UI or broader exchange support
+
+Avoid jumping to:
+
+- multi-exchange support too early
+- token / points systems
+- dashboard-first work before the decision loop is solid
+
+## Editing Guidance
+
+When making changes:
+
+- prefer extending existing scripts over creating unnecessary new entrypoints
+- keep outputs UTF-8 safe
+- preserve machine-readable JSON envelopes where they already exist
+- keep AI feedback focused on discipline, clarity, and execution quality
+- do not let AI wording drift into market prediction or overconfidence
+
+If adding a new AI review step, it should usually output:
+
+- `score`
+- `verdict`
+- `strengths`
+- `risks`
+- `action`
+- `encouragement`
+
+And `encouragement` must reward process quality, not profit outcome.
 
 ## Quick Commands
 
+### Basic validation
+
 ```bash
-# Test/installation check (no dependencies required)
+python scripts/pre_trade_check.py --help
 python scripts/log_trade.py --help
+python scripts/ai_review_history.py --help
+python scripts/weekly_review.py --json
+```
 
-# Log a trade
-python scripts/log_trade.py --symbol BTCUSDT --direction LONG \
-  --entry 85000 --exit 86000 --pnl_percent 1.18 --result WIN \
-  --reason "突破回踩确认，MA5 支撑" --timeframe 1h
+### Pre-trade review
 
-# Pre-trade check
+```bash
 python scripts/pre_trade_check.py --symbol BTCUSDT --direction LONG \
-  --entry 85000 --reason "1h 突破回踩，MA20 支撑"
+  --entry 85000 --stop-loss 84200 --target 87000 \
+  --reason "1h breakout retest confirmation, MA20 support, invalidation below 84200" \
+  --ai
+```
 
-# Analysis commands
-python scripts/analyze.py              # Basic stats
-python scripts/analyze_impulse.py      # Impulse trading analysis
-python scripts/analyze_patterns.py     # Price action & MA patterns
-python scripts/weekly_review.py        # Weekly review report
+### Post-trade review
 
-# Syntax check before commit
+```bash
+python scripts/log_trade.py --symbol ETHUSDT --direction SHORT \
+  --entry 2480 --exit 2445 --pnl_percent 1.41 --result WIN \
+  --reason "1h resistance rejection, EMA20 pressure, failed retest" \
+  --timeframe 1h --ai
+```
+
+### AI review history
+
+```bash
+python scripts/ai_review_history.py
+python scripts/ai_review_history.py --status success --last 5
+python scripts/ai_review_history.py --type post_trade --detail --last 2
+```
+
+### Analysis scripts
+
+```bash
+python scripts/analyze_impulse.py --json
+python scripts/analyze_patterns.py --json
+python scripts/weekly_review.py --json
+```
+
+### Syntax check
+
+```bash
 python -m py_compile scripts/*.py
 ```
 
-## Architecture
+## Skill / Agent Use
 
-### Core Modules
+This repository may be used as a skill-like project in OpenClaw or Claude Code contexts.
 
-```
-scripts/
-├── trade_analysis_utils.py    # Shared utilities (reason analysis, impulse detection)
-├── log_trade.py               # Trade logging with reason quality analysis
-├── pre_trade_check.py         # Pre-trade checklist
-├── analyze_impulse.py         # FOMO/revenge/emotion detection
-├── analyze_patterns.py        # Price action & MA pattern analysis
-├── weekly_review.py           # Weekly review reports
-├── analyze.py                 # Basic win rate & PnL analysis
-├── generate_rules.py          # Rule generation from historical data
-└── binance_*.py               # Binance Futures integration (optional)
-```
+That means good changes should preserve:
 
-### Data Flow
+- clear CLI entrypoints
+- composable JSON outputs
+- local-file configuration
+- low dependency overhead
+- deterministic behavior suitable for agent workflows
 
-1. **Trade Logging** → `data/trades.json` (with reason_quality, impulse_signals, timeframe)
-2. **Analysis Scripts** → Read trades, output reports/insights
-3. **Rule Generation** → `data/learned_rules.json`
+Do not redesign it around a heavy framework unless the user explicitly asks for that shift.
 
-### Key Design Principles
+## Documentation Alignment
 
-1. **Zero external dependencies** - Core uses only Python standard library
-2. **JSON-first storage** - All data in JSON format
-3. **CLI-first design** - Easy to integrate and automate
-4. **ASCII output** - Compatible with Windows default terminal encoding
-5. **Modular scripts** - Each script runs independently, composable
+Keep these files aligned with the actual implementation:
 
-## Technical Notes
+- `README.md`
+- `ROADMAP.md`
+- `CLAUDE.md`
+- `SKILL.md`
 
-- **Python 3.11+** required (uses `str | None` union syntax)
-- **UTF-8 encoding** for all file I/O (Windows compatibility via `sys.stdout` wrapper)
-- **No database** - Uses JSON files for simplicity
-
-## OpenClaw Skill
-
-This is also an OpenClaw Skill (`SKILL.md`, `_meta.json`). The skill:
-- Runs via `python3 {baseDir}/scripts/xxx`
-- Requires Python 3.11+
-- Emoji: 🧠
-
-## Common Development Tasks
-
-### Adding a new analysis script
-
-1. Create `scripts/new_feature.py`
-2. Import utilities: `from trade_analysis_utils import ...`
-3. Use `DATA_DIR = Path(__file__).parent.parent / "data"` for data paths
-4. Add UTF-8 encoding wrapper for Windows
-5. Support `--json` flag for AI consumption
-
-### Testing changes
-
-```bash
-# Syntax check
-python -m py_compile scripts/your_script.py
-
-# Run with test data
-python scripts/your_script.py --json
-```
-
-### Documentation
-
-- User-facing: `README.md` (Chinese + English)
-- OpenClaw Skill: `SKILL.md`
-- Release notes: `PREPUBLISH_REPORT.md`
+If implementation meaningfully changes the product shape, update the docs in the same pass.

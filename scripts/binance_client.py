@@ -30,7 +30,11 @@ class BinanceClientError(RuntimeError):
 
 
 def load_local_env() -> None:
-    """Load simple KEY=VALUE pairs from local env files if process env is missing."""
+    """Load simple KEY=VALUE pairs from local env files.
+
+    Local project config should override stale process environment values so
+    edits to .binance.env take effect immediately.
+    """
     for path in LOCAL_ENV_FILES:
         if not path.exists():
             continue
@@ -43,7 +47,7 @@ def load_local_env() -> None:
                 key, value = line.split("=", 1)
                 key = key.strip()
                 value = value.strip().strip("'").strip('"')
-                if key and key not in os.environ:
+                if key:
                     os.environ[key] = value
 
 

@@ -25,7 +25,9 @@ wheels/
 
 # Local configuration
 .binance.env
+.ai.env
 data/trades.json
+data/ai_reviews.json
 data/learned_rules.json
 data/reports/
 

@@ -17,6 +17,21 @@ TRADES_FILE = DATA_DIR / "trades.json"
 SOURCE_NAME = "binance_futures"
 
 
+def build_json_response(report_type: str, data: dict[str, Any] | None = None, error: dict[str, Any] | None = None) -> dict[str, Any]:
+    response = {
+        "meta": {
+            "report_type": report_type,
+            "generated_at": datetime.now().isoformat(),
+            "status": "error" if error else "ok",
+        }
+    }
+    if error:
+        response["error"] = error
+    else:
+        response["data"] = data
+    return response
+
+
 def load_trade_store() -> dict[str, Any]:
     if TRADES_FILE.exists():
         with open(TRADES_FILE, "r", encoding="utf-8") as handle:
@@ -279,8 +294,19 @@ def import_binance_trades(
         income_rows = income_by_symbol.get(symbol, [])
         if not income_rows:
             continue
-        window_start = min(to_int(row.get("time")) for row in income_rows) - 86_400_000
-        window_end = max(to_int(row.get("time")) for row in income_rows) + 86_400_000
+        min_income_time = min(to_int(row.get("time")) for row in income_rows)
+        max_income_time = max(to_int(row.get("time")) for row in income_rows)
+
+        # Completed futures trades can stay open for multiple days before the
+        # realized PnL row appears. Respect an explicit start_time when present;
+        # otherwise use a wider lookback window so the opening fills are still
+        # available when reconstructing the round-trip.
+        if start_time is not None:
+            window_start = start_time
+        else:
+            window_start = min_income_time - (7 * 86_400_000)
+
+        window_end = end_time if end_time is not None else (max_income_time + 86_400_000)
         user_trades.extend(client.get_user_trades(symbol, start_time=window_start, end_time=window_end))
 
     imported_candidates = build_completed_trades(user_trades)
@@ -321,11 +347,17 @@ def main() -> int:
             dry_run=args.dry_run,
         )
     except BinanceClientError as exc:
+        if args.json:
+            print(json.dumps(build_json_response(
+                "binance_sync",
+                error={"code": "binance_client_error", "message": str(exc)},
+            ), indent=2, ensure_ascii=False))
+            return 1
         print(f"ERROR: {exc}")
         return 1
 
     if args.json:
-        print(json.dumps(result, indent=2))
+        print(json.dumps(build_json_response("binance_sync", data=result), indent=2, ensure_ascii=False))
         return 0
 
     print("Binance Futures sync summary")
